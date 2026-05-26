@@ -133,6 +133,13 @@ def run_pipeline(brief: str, llm: LLMClient, yes: bool = False) -> RunState:
         f"[sandbox] exit_code={result.exit_code}, timed_out={result.timed_out}"
     )
 
+    # The deliverable did not execute cleanly. "complete" must mean the
+    # deliverable was produced AND ran successfully — short-circuit before
+    # the final gate so the pipeline cannot report success on a crashed run.
+    if _is_sandbox_failure(result):
+        _record_sandbox_failure(state, result)
+        return state
+
     # Gate 2 — before final output
     decision = gate.ask("Sandbox completed. Review the deliverable and approve final output?")
     state.transcript.append(f"[gate] final gate decision: {decision}")
@@ -214,6 +221,10 @@ def resume_pipeline(state: RunState, llm: LLMClient, yes: bool = False) -> RunSt
         f"[sandbox] exit_code={result.exit_code}, timed_out={result.timed_out}"
     )
 
+    if _is_sandbox_failure(result):
+        _record_sandbox_failure(state, result)
+        return state
+
     decision = gate.ask(
         "Sandbox completed. Review the deliverable and approve final output?"
     )
@@ -233,6 +244,25 @@ def _print_critic_issues(state: RunState) -> None:
                 for i, issue in enumerate(issues, 1):
                     print(f"  {i}. {issue}")
             break
+
+
+def _is_sandbox_failure(result) -> bool:
+    """A Sandbox result indicates the deliverable did NOT run cleanly when
+    its exit code is non-zero or it timed out. The pipeline must not treat
+    such a run as "complete"."""
+    return result.exit_code != 0 or result.timed_out
+
+
+def _record_sandbox_failure(state: RunState, result) -> None:
+    """Set status to needs_human_review and log a diagnostic line summarising
+    why the sandbox run failed. Called only when _is_sandbox_failure is true."""
+    state.status = "needs_human_review"
+    stderr_excerpt = (result.stderr or "").strip()[:300]
+    state.transcript.append(
+        f"[sandbox] failure: deliverable did not execute cleanly "
+        f"(exit_code={result.exit_code}, timed_out={result.timed_out}). "
+        f"stderr: {stderr_excerpt}"
+    )
 
 
 def _clarification_sub_goals(state: RunState) -> list[dict]:

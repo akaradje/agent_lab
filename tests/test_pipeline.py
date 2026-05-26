@@ -1,9 +1,10 @@
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from agent_lab.pipeline import run_pipeline
+from agent_lab.sandbox import SandboxResult
 from agent_lab.state import RunState
 
 
@@ -59,7 +60,7 @@ class TestLinearPipeline:
             json.dumps([{"id": "1", "goal": "g", "success_criterion": "s"}]),
             json.dumps([{"sub_goal_id": "1", "findings": "f", "sources": "s"}]),
             json.dumps({"overview": "o", "components": [], "build_order": [], "notes": ""}),
-            "done",
+            "```python\npass\n```",
             json.dumps({"approved": True, "issues": []}),
         ]
         llm = _make_mock_llm(responses)
@@ -72,7 +73,7 @@ class TestLinearPipeline:
             json.dumps([{"id": "1", "goal": "g", "success_criterion": "s"}]),
             json.dumps([{"sub_goal_id": "1", "findings": "f", "sources": "s"}]),
             json.dumps({"overview": "o", "components": [], "build_order": [], "notes": ""}),
-            "done",
+            "```python\npass\n```",
             json.dumps({"approved": True, "issues": []}),
         ]
         llm = _make_mock_llm(responses)
@@ -85,7 +86,7 @@ class TestLinearPipeline:
             json.dumps([{"id": "1", "goal": "g", "success_criterion": "s"}]),
             json.dumps([{"sub_goal_id": "1", "findings": "f", "sources": "s"}]),
             json.dumps({"overview": "o", "components": [], "build_order": [], "notes": ""}),
-            "done",
+            "```python\npass\n```",
             json.dumps({"approved": True, "issues": []}),
         ]
         llm = _make_mock_llm(responses)
@@ -144,7 +145,7 @@ class TestClarificationHalt:
             json.dumps([{"id": "1", "goal": "Build it", "success_criterion": "Works"}]),
             json.dumps([{"sub_goal_id": "1", "findings": "f", "sources": "s"}]),
             json.dumps({"overview": "o", "components": [], "build_order": [], "notes": ""}),
-            "done",
+            "```python\npass\n```",
             json.dumps({"approved": True, "issues": []}),
         ]
         llm = _make_mock_llm(responses)
@@ -165,13 +166,86 @@ class TestClarificationHalt:
             }]),
             json.dumps([{"sub_goal_id": "1", "findings": "f", "sources": "s"}]),
             json.dumps({"overview": "o", "components": [], "build_order": [], "notes": ""}),
-            "done",
+            "```python\npass\n```",
             json.dumps({"approved": True, "issues": []}),
         ]
         llm = _make_mock_llm(responses)
         state = run_pipeline("Concrete brief", llm, yes=True)
 
         assert state.status == "complete"
+
+
+def _happy_path_responses() -> list[str]:
+    """Five LLM responses that produce a clean run through Critic-approve."""
+    return [
+        json.dumps([{"id": "1", "goal": "Build it", "success_criterion": "Works"}]),
+        json.dumps([{"sub_goal_id": "1", "findings": "f", "sources": "s"}]),
+        json.dumps({"overview": "o", "components": [], "build_order": [], "notes": ""}),
+        "```python\nprint('hello')\n```",
+        json.dumps({"approved": True, "issues": []}),
+    ]
+
+
+class TestSandboxFailurePreventsComplete:
+    """The pipeline must NOT report status 'complete' when the Sandbox
+    executed the deliverable and it failed (non-zero exit code or timeout).
+    Otherwise 'complete' becomes a false-positive signal that hides real
+    failures (e.g. a deliverable that crashed with SyntaxError)."""
+
+    def test_sandbox_exit_code_nonzero_blocks_complete(self) -> None:
+        llm = _make_mock_llm(_happy_path_responses())
+        with patch("agent_lab.pipeline.Sandbox") as mock_sandbox:
+            mock_sandbox.return_value.run.return_value = SandboxResult(
+                stdout="",
+                stderr='  File "<string>", line 1\n    SyntaxError: bad',
+                exit_code=1,
+                timed_out=False,
+            )
+            state = run_pipeline("brief", llm, yes=True)
+
+        assert state.status == "needs_human_review"
+        assert state.status != "complete"
+        joined = " | ".join(state.transcript)
+        assert "[sandbox] failure" in joined
+        assert "exit_code=1" in joined
+        # The final gate must NOT be reached when sandbox failed
+        assert "final gate decision" not in joined
+
+    def test_sandbox_timeout_blocks_complete(self) -> None:
+        llm = _make_mock_llm(_happy_path_responses())
+        with patch("agent_lab.pipeline.Sandbox") as mock_sandbox:
+            mock_sandbox.return_value.run.return_value = SandboxResult(
+                stdout="partial output",
+                stderr="",
+                exit_code=-1,
+                timed_out=True,
+            )
+            state = run_pipeline("brief", llm, yes=True)
+
+        assert state.status == "needs_human_review"
+        assert state.status != "complete"
+        joined = " | ".join(state.transcript)
+        assert "[sandbox] failure" in joined
+        assert "timed_out=True" in joined
+        assert "final gate decision" not in joined
+
+    def test_sandbox_exit_zero_still_yields_complete(self) -> None:
+        """Regression: a clean sandbox run (exit_code=0, no timeout) must
+        still produce status 'complete' after the final gate approves."""
+        llm = _make_mock_llm(_happy_path_responses())
+        with patch("agent_lab.pipeline.Sandbox") as mock_sandbox:
+            mock_sandbox.return_value.run.return_value = SandboxResult(
+                stdout="hello",
+                stderr="",
+                exit_code=0,
+                timed_out=False,
+            )
+            state = run_pipeline("brief", llm, yes=True)
+
+        assert state.status == "complete"
+        joined = " | ".join(state.transcript)
+        assert "final gate decision: approve" in joined
+        assert "[sandbox] failure" not in joined
 
 
 class TestQALoop:
@@ -234,8 +308,8 @@ class TestQALoop:
             "v1",
             # Round 1: Critic rejects
             reject_verdict,
-            # Worker revise
-            "v2",
+            # Worker revise (must be runnable — pipeline now checks sandbox exit_code)
+            "```python\npass\n```",
             # Round 2: Critic approves
             approve_verdict,
         ]
@@ -255,7 +329,7 @@ class TestQALoop:
             json.dumps([{"id": "1", "goal": "g", "success_criterion": "s"}]),
             json.dumps([{"sub_goal_id": "1", "findings": "f", "sources": "s"}]),
             json.dumps({"overview": "o", "components": [], "build_order": [], "notes": ""}),
-            "done",
+            "```python\npass\n```",
             approve_verdict,
         ]
         llm = _make_mock_llm(responses)
@@ -304,7 +378,7 @@ class TestHumanGates:
             json.dumps([{"id": "1", "goal": "g", "success_criterion": "s"}]),
             json.dumps([{"sub_goal_id": "1", "findings": "f", "sources": "s"}]),
             json.dumps({"overview": "o", "components": [], "build_order": [], "notes": ""}),
-            "deliverable",
+            "```python\npass\n```",
             json.dumps({"approved": True, "issues": []}),
         ]
 
