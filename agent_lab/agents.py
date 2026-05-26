@@ -38,17 +38,10 @@ class Orchestrator(Agent):
         return state
 
     def _parse(self, raw: str) -> list[dict[str, str]]:
-        # The model may wrap the JSON in markdown fences; strip them.
-        # Anchored to start/end only — internal backticks are left alone.
-        text = raw.strip()
-        text = re.sub(r"^```[^\n]*\n", "", text)
-        text = re.sub(r"\n```\s*$", "", text)
-        text = text.strip()
-
+        text = _strip_markdown_fences(raw)
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError:
-            # Fallback: wrap the raw text as a single sub-goal.
             return [{"id": "1", "goal": raw, "success_criterion": "see goal"}]
 
         if isinstance(parsed, list):
@@ -56,3 +49,120 @@ class Orchestrator(Agent):
         if isinstance(parsed, dict) and "sub_goals" in parsed:
             return parsed["sub_goals"]
         return [{"id": "1", "goal": raw, "success_criterion": "see goal"}]
+
+
+class Researcher(Agent):
+    """Gathers and synthesizes information for each sub-goal."""
+
+    STAGE = "researcher"
+
+    def run(self, state: RunState) -> RunState:
+        sub_goals = _find_artifact(state, "orchestrator", "sub_goals")
+        context = json.dumps({"brief": state.brief, "sub_goals": sub_goals}, indent=2)
+
+        model, reasoning = AGENT_MODELS[self.STAGE]
+        response = self.llm.complete(
+            messages=[{"role": "user", "content": context}],
+            system=self.system_prompt,
+            model=model,
+            reasoning_effort=reasoning,
+        )
+        findings = _parse_json_response(response)
+        artifact = {"stage": self.STAGE, "agent": self.name, "findings": findings}
+        state.artifacts.append(artifact)
+        state.transcript.append(f"[{self.STAGE}] produced {len(findings)} finding(s)")
+        return state
+
+
+class Architect(Agent):
+    """Designs the solution based on research and sub-goals."""
+
+    STAGE = "architect"
+
+    def run(self, state: RunState) -> RunState:
+        sub_goals = _find_artifact(state, "orchestrator", "sub_goals")
+        findings = _find_artifact(state, "researcher", "findings")
+        context = json.dumps(
+            {"brief": state.brief, "sub_goals": sub_goals, "research": findings},
+            indent=2,
+        )
+
+        model, reasoning = AGENT_MODELS[self.STAGE]
+        response = self.llm.complete(
+            messages=[{"role": "user", "content": context}],
+            system=self.system_prompt,
+            model=model,
+            reasoning_effort=reasoning,
+        )
+        design = _parse_json_response(response)
+        if isinstance(design, list):
+            design = {"raw": design}
+        artifact = {"stage": self.STAGE, "agent": self.name, "design": design}
+        state.artifacts.append(artifact)
+        state.transcript.append(
+            f"[{self.STAGE}] produced design with {len(design.get('components', []))} component(s)"
+        )
+        return state
+
+
+class Worker(Agent):
+    """Produces the actual deliverable from the design."""
+
+    STAGE = "worker"
+
+    def run(self, state: RunState) -> RunState:
+        sub_goals = _find_artifact(state, "orchestrator", "sub_goals")
+        findings = _find_artifact(state, "researcher", "findings")
+        design = _find_artifact(state, "architect", "design")
+        context = json.dumps(
+            {
+                "brief": state.brief,
+                "sub_goals": sub_goals,
+                "research": findings,
+                "design": design,
+            },
+            indent=2,
+        )
+
+        model, reasoning = AGENT_MODELS[self.STAGE]
+        response = self.llm.complete(
+            messages=[{"role": "user", "content": context}],
+            system=self.system_prompt,
+            model=model,
+            reasoning_effort=reasoning,
+        )
+        artifact = {
+            "stage": self.STAGE,
+            "agent": self.name,
+            "deliverable": response,
+        }
+        state.artifacts.append(artifact)
+        state.transcript.append(
+            f"[{self.STAGE}] produced {len(response)} character(s) of output"
+        )
+        return state
+
+
+# ── helpers ──────────────────────────────────────────────────────────
+
+
+def _strip_markdown_fences(raw: str) -> str:
+    text = raw.strip()
+    text = re.sub(r"^```[^\n]*\n", "", text)
+    text = re.sub(r"\n```\s*$", "", text)
+    return text.strip()
+
+
+def _parse_json_response(raw: str) -> list | dict:
+    text = _strip_markdown_fences(raw)
+    try:
+        return json.loads(text)  # type: ignore[no-any-return]
+    except json.JSONDecodeError:
+        return {"raw": raw}
+
+
+def _find_artifact(state: RunState, stage: str, key: str) -> list | dict | None:
+    for a in state.artifacts:
+        if a.get("stage") == stage:
+            return a.get(key)
+    return None
