@@ -69,7 +69,7 @@ class TestOrchestrator:
         kwargs = llm.complete.call_args[1]
         assert kwargs["system"] == prompt
         assert kwargs["model"] == "deepseek-v4-flash"
-        assert kwargs["reasoning_effort"] == "non-think"
+        assert kwargs["reasoning_effort"] == "low"
 
     def test_parse_strips_markdown_fences(self) -> None:
         fenced = '```json\n[{"id": "1", "goal": "g", "success_criterion": "s"}]\n```'

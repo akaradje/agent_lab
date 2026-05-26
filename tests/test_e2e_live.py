@@ -77,7 +77,10 @@ class TestLivePipeline:
         llm = LLMClient(budget)
         state = run_pipeline(self.SIMPLE_BRIEF, llm, yes=True)
 
-        critic = _find_artifact(state, "critic")
+        # Pipeline must reach "complete" — QA loop eventually approves
+        assert state.status == "complete", f"Expected complete, got {state.status}"
+        # Last critic verdict should approve
+        critic = _find_last_artifact(state, "critic")
         verdict = critic.get("verdict", {})
         assert verdict.get("approved"), f"Critic did not approve: {verdict}"
 
@@ -105,6 +108,13 @@ class TestLivePipeline:
 
 def _find_artifact(state, stage: str) -> dict:
     for a in state.artifacts:
+        if a.get("stage") == stage:
+            return a
+    return {}
+
+
+def _find_last_artifact(state, stage: str) -> dict:
+    for a in reversed(state.artifacts):
         if a.get("stage") == stage:
             return a
     return {}

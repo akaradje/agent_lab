@@ -16,14 +16,14 @@ DeepSeek V4 Pro is mid-promo and its price changes after 2026-05-31.
 
 ## Reasoning modes
 
-V4 models support three modes via the `reasoning_effort` parameter:
-- Non-think — fast responses, lowest cost.
-- Think High — logical analysis. Use for design/review agents.
-- Think Max — maximum effort, highest cost. Use sparingly.
+V4 models accept a `reasoning_effort` parameter via `extra_body`.
+Valid values (as of late May 2026): `low`, `medium`, `high`, `max`, `xhigh`.
 
-Thinking is also toggled via an `extra_body={"thinking": {"type": ...}}`
-field on the ChatCompletions call. Check the current DeepSeek docs for the
-exact parameter shape when implementing `llm_client.py`.
+This project uses two levels:
+- `low` — fast responses, lowest cost. Used by Orchestrator and Sandbox.
+- `high` — logical analysis. Used by Researcher, Architect, Worker, Critic.
+
+`max` / `xhigh` are available but not currently routed to any agent.
 
 ## Pricing — VERIFY BEFORE USE, PROMO ACTIVE
 
@@ -39,12 +39,12 @@ When the promo ends, the user edits those constants in one place.
 
 | Agent        | Model               | Reasoning   |
 |--------------|---------------------|-------------|
-| Orchestrator | deepseek-v4-flash   | Non-think   |
-| Researcher   | deepseek-v4-flash   | Think High  |
-| Architect    | deepseek-v4-pro     | Think High  |
-| Worker       | deepseek-v4-flash   | Think High  |
-| Critic       | deepseek-v4-pro     | Think High  |
-| Sandbox      | deepseek-v4-flash   | Non-think   |
+| Orchestrator | deepseek-v4-flash   | low         |
+| Researcher   | deepseek-v4-flash   | high        |
+| Architect    | deepseek-v4-pro     | high        |
+| Worker       | deepseek-v4-flash   | high        |
+| Critic       | deepseek-v4-pro     | high        |
+| Sandbox      | deepseek-v4-flash   | low         |
 
 Rationale: DeepSeek recommends defaulting to Flash and escalating to Pro
 only where it measurably helps. Pro is reserved for the two agents whose

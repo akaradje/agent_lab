@@ -12,10 +12,10 @@ PRICING: dict[str, tuple[float, float]] = {
 
 # Maps agent name -> (model, reasoning_effort).
 AGENT_MODELS: dict[str, tuple[str, str]] = {
-    "orchestrator": ("deepseek-v4-flash", "non-think"),
-    "researcher": ("deepseek-v4-flash", "think-high"),
-    "architect": ("deepseek-v4-pro", "think-high"),
-    "worker": ("deepseek-v4-flash", "think-high"),
-    "critic": ("deepseek-v4-pro", "think-high"),
-    "sandbox": ("deepseek-v4-flash", "non-think"),
+    "orchestrator": ("deepseek-v4-flash", "low"),
+    "researcher": ("deepseek-v4-flash", "high"),
+    "architect": ("deepseek-v4-pro", "high"),
+    "worker": ("deepseek-v4-flash", "high"),
+    "critic": ("deepseek-v4-pro", "high"),
+    "sandbox": ("deepseek-v4-flash", "low"),
 }

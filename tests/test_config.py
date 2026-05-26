@@ -23,6 +23,6 @@ class TestConfig:
             assert model in config.PRICING, f"{agent} model {model} not in PRICING"
 
     def test_agent_models_reasoning_effort_valid(self) -> None:
-        valid = {"non-think", "think-high", "think-max"}
+        valid = {"low", "medium", "high", "max", "xhigh"}
         for agent, (_, effort) in config.AGENT_MODELS.items():
             assert effort in valid, f"{agent} reasoning_effort {effort} invalid"
