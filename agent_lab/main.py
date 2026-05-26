@@ -17,11 +17,16 @@ def main() -> None:
         default="run_output.json",
         help="Path to write the run state JSON (default: run_output.json)",
     )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Auto-approve all human gates (for tests only, never the default)",
+    )
     args = parser.parse_args()
 
     budget = BudgetTracker(max_tokens=MAX_TOTAL_TOKENS, max_usd=MAX_USD)
     llm = LLMClient(budget)
-    state = run_pipeline(args.brief, llm)
+    state = run_pipeline(args.brief, llm, yes=args.yes)
     state.save(Path(args.output))
     print(f"Run complete. Status: {state.status}")
     print(f"Artifacts: {len(state.artifacts)}")

@@ -42,7 +42,7 @@ class TestLinearPipeline:
             json.dumps({"approved": True, "issues": []}),
         ]
         llm = _make_mock_llm(responses)
-        state = run_pipeline("Build a hello-world CLI", llm)
+        state = run_pipeline("Build a hello-world CLI", llm, yes=True)
 
         assert state.status == "complete"
         assert len(state.artifacts) == 5
@@ -51,7 +51,7 @@ class TestLinearPipeline:
         assert state.artifacts[2]["stage"] == "architect"
         assert state.artifacts[3]["stage"] == "worker"
         assert state.artifacts[4]["stage"] == "critic"
-        assert len(state.transcript) >= 5
+        assert len(state.transcript) >= 7  # 5 agents + 2 gate entries
 
     def test_state_passes_brief_through(self) -> None:
         responses = [
@@ -62,7 +62,7 @@ class TestLinearPipeline:
             json.dumps({"approved": True, "issues": []}),
         ]
         llm = _make_mock_llm(responses)
-        state = run_pipeline("Custom brief", llm)
+        state = run_pipeline("Custom brief", llm, yes=True)
 
         assert state.brief == "Custom brief"
 
@@ -75,7 +75,7 @@ class TestLinearPipeline:
             json.dumps({"approved": True, "issues": []}),
         ]
         llm = _make_mock_llm(responses)
-        run_pipeline("brief", llm)
+        run_pipeline("brief", llm, yes=True)
 
         assert llm.complete.call_count == 5
 
@@ -88,7 +88,7 @@ class TestLinearPipeline:
             json.dumps({"approved": True, "issues": []}),
         ]
         llm = _make_mock_llm(responses)
-        state = run_pipeline("brief", llm)
+        state = run_pipeline("brief", llm, yes=True)
 
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "output.json"
@@ -134,7 +134,7 @@ class TestQALoop:
             reject_verdict,
         ]
         llm = _make_mock_llm(responses)
-        state = run_pipeline("brief", llm)
+        state = run_pipeline("brief", llm, yes=True)
 
         assert state.status == "needs_human_review"
         # 4 initial + 3 critic + 2 worker revisions = 9
@@ -164,7 +164,7 @@ class TestQALoop:
             approve_verdict,
         ]
         llm = _make_mock_llm(responses)
-        state = run_pipeline("brief", llm)
+        state = run_pipeline("brief", llm, yes=True)
 
         assert state.status == "complete"
         assert llm.complete.call_count == 7  # 4 init + 3 QA (2 critic + 1 revise)
@@ -183,7 +183,7 @@ class TestQALoop:
             approve_verdict,
         ]
         llm = _make_mock_llm(responses)
-        state = run_pipeline("brief", llm)
+        state = run_pipeline("brief", llm, yes=True)
 
         assert state.status == "complete"
         assert llm.complete.call_count == 5
@@ -207,7 +207,7 @@ class TestQALoop:
             approve_verdict,
         ]
         llm = _make_mock_llm(responses)
-        run_pipeline("brief", llm)
+        run_pipeline("brief", llm, yes=True)
 
         # Call order: Orch, Researcher, Architect, Worker, Critic, Worker-revise, Critic
         # The revision Worker call is index 5 (6th call, 0-indexed)
@@ -216,3 +216,111 @@ class TestQALoop:
         assert "Missing docstrings" in user_content
         assert "issues_to_address" in user_content
         assert "previous_deliverable" in user_content
+
+
+class TestHumanGates:
+    """Tests for Phase 5 human approval gates."""
+
+    @staticmethod
+    def _basic_responses() -> list[str]:
+        """Return responses that pass QA on the first round."""
+        return [
+            json.dumps([{"id": "1", "goal": "g", "success_criterion": "s"}]),
+            json.dumps([{"sub_goal_id": "1", "findings": "f", "sources": "s"}]),
+            json.dumps({"overview": "o", "components": [], "build_order": [], "notes": ""}),
+            "deliverable",
+            json.dumps({"approved": True, "issues": []}),
+        ]
+
+    def test_yes_flag_auto_approves_and_completes(self) -> None:
+        """With yes=True, gates auto-approve and status is complete."""
+        llm = _make_mock_llm(self._basic_responses())
+        state = run_pipeline("brief", llm, yes=True)
+
+        assert state.status == "complete"
+        # Transcript includes gate entries
+        gate_entries = [t for t in state.transcript if t.startswith("[gate]")]
+        assert len(gate_entries) == 2
+        assert "approve" in gate_entries[0]
+        assert "approve" in gate_entries[1]
+
+    def test_no_yes_flag_blocks_for_input(self) -> None:
+        """With yes=False (default), the gate calls input() on stdin."""
+        llm = _make_mock_llm(self._basic_responses())
+
+        with __import__("unittest").mock.patch("builtins.input") as mock_input:
+            mock_input.side_effect = ["approve", "approve"]
+            state = run_pipeline("brief", llm, yes=False)
+
+        assert state.status == "complete"
+        assert mock_input.call_count == 2
+
+    def test_reject_at_sandbox_gate_stops_pipeline(self) -> None:
+        """When user rejects at the sandbox gate, pipeline stops there."""
+        llm = _make_mock_llm(self._basic_responses())
+
+        with __import__("unittest").mock.patch("builtins.input") as mock_input:
+            mock_input.return_value = "reject"
+            state = run_pipeline("brief", llm, yes=False)
+
+        assert state.status == "rejected_at_gate_sandbox"
+        assert mock_input.call_count == 1  # only first gate reached
+
+    def test_reject_at_final_gate_stops_pipeline(self) -> None:
+        """When user approves sandbox but rejects final, status reflects that."""
+        llm = _make_mock_llm(self._basic_responses())
+
+        with __import__("unittest").mock.patch("builtins.input") as mock_input:
+            mock_input.side_effect = ["approve", "reject"]
+            state = run_pipeline("brief", llm, yes=False)
+
+        assert state.status == "rejected_at_gate_final"
+        assert mock_input.call_count == 2
+
+    def test_edit_at_sandbox_gate_stops_pipeline(self) -> None:
+        """edit is treated as not-approve and stops the pipeline."""
+        llm = _make_mock_llm(self._basic_responses())
+
+        with __import__("unittest").mock.patch("builtins.input") as mock_input:
+            mock_input.return_value = "edit"
+            state = run_pipeline("brief", llm, yes=False)
+
+        assert state.status == "rejected_at_gate_sandbox"
+
+    def test_gates_skipped_when_qa_never_approves(self) -> None:
+        """When QA loop exhausts without approval, gates are never reached."""
+        reject = json.dumps({"approved": False, "issues": ["bad"]})
+        responses = [
+            json.dumps([{"id": "1", "goal": "g", "success_criterion": "s"}]),
+            json.dumps([{"sub_goal_id": "1", "findings": "f", "sources": "s"}]),
+            json.dumps({"overview": "o", "components": [], "build_order": [], "notes": ""}),
+            "v1",
+            reject, "v2",
+            reject, "v3",
+            reject,
+        ]
+        llm = _make_mock_llm(responses)
+
+        with __import__("unittest").mock.patch("builtins.input") as mock_input:
+            state = run_pipeline("brief", llm, yes=False)
+
+        assert state.status == "needs_human_review"
+        assert mock_input.call_count == 0  # gates never called
+
+    def test_human_gate_ask_returns_approve_for_yes(self) -> None:
+        """HumanGate.ask always returns 'approve' when yes=True."""
+        from agent_lab.pipeline import HumanGate
+
+        gate = HumanGate(yes=True)
+        assert gate.ask("any summary") == "approve"
+
+    def test_human_gate_validates_input(self) -> None:
+        """HumanGate.ask re-prompts on invalid input, then accepts valid."""
+        from agent_lab.pipeline import HumanGate
+
+        gate = HumanGate(yes=False)
+        with __import__("unittest").mock.patch("builtins.input") as mock_input:
+            mock_input.side_effect = ["maybe", "  APPROVE  "]
+            result = gate.ask("Test gate")
+            assert result == "approve"
+            assert mock_input.call_count == 2
