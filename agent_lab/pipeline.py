@@ -59,6 +59,17 @@ def run_pipeline(brief: str, llm: LLMClient, yes: bool = False) -> RunState:
     orch = Orchestrator("Orchestrator", _load_prompt("orchestrator"), llm)
     state = orch.run(state)
 
+    clarifications = _clarification_sub_goals(state)
+    if clarifications:
+        state.status = "needs_human_review"
+        state.transcript.append(
+            f"[pipeline] halted at orchestrator: "
+            f"{len(clarifications)} clarification request(s) need human input"
+        )
+        for sg in clarifications:
+            state.transcript.append(f"[clarification] {sg.get('goal', '')}")
+        return state
+
     researcher = Researcher("Researcher", _load_prompt("researcher"), llm)
     state = researcher.run(state)
 
@@ -222,6 +233,17 @@ def _print_critic_issues(state: RunState) -> None:
                 for i, issue in enumerate(issues, 1):
                     print(f"  {i}. {issue}")
             break
+
+
+def _clarification_sub_goals(state: RunState) -> list[dict]:
+    """Return Orchestrator sub-goals carrying `needs_clarification: true`.
+    Used as the structural halt signal — no string matching on goal text.
+    """
+    for a in state.artifacts:
+        if a.get("stage") == "orchestrator":
+            sub_goals = a.get("sub_goals", [])
+            return [sg for sg in sub_goals if sg.get("needs_clarification")]
+    return []
 
 
 def _find_last_worker_deliverable(state: RunState) -> str | None:

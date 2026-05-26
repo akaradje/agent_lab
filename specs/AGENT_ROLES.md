@@ -12,9 +12,12 @@ can be edited without touching Python.
 
 Role: decompose a brief into 3-6 concrete, ordered sub-goals.
 Does NOT solve anything. Only plans.
-Output: a JSON array of `{id, goal, success_criterion}`.
-Constraint: if the brief is too vague to decompose, return one sub-goal
-asking for clarification rather than inventing scope.
+Output: a JSON array of `{id, goal, success_criterion}`. A clarification
+sub-goal additionally carries `"needs_clarification": true` so the pipeline
+can detect the halt condition structurally rather than by string matching.
+Constraint: if the brief is too vague to decompose, return exactly one
+sub-goal asking for clarification (with `needs_clarification: true`) rather
+than inventing scope. See `prompts/orchestrator.md` for the exact shape.
 
 ## 2. Researcher (`prompts/researcher.md`)
 

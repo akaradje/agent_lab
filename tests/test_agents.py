@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock
 
 from agent_lab.agents import Architect, Critic, Orchestrator, Researcher, Worker
@@ -474,6 +475,54 @@ class TestCritic:
         verdict = result.artifacts[-1]["verdict"]
         assert verdict["approved"] is True
         assert verdict["issues"] == []
+        assert verdict["checklist"] == []
+
+    def test_parse_retains_checklist_field(self) -> None:
+        verdict_json = json.dumps({
+            "approved": False,
+            "checklist": [
+                {"item": 1, "verdict": "PASS", "reason": "meets criterion"},
+                {"item": 4, "verdict": "FAIL", "reason": "mutable default arg"},
+            ],
+            "issues": [{"severity": "high", "detail": "acc=[] leaks state"}],
+        })
+        llm = _make_mock_llm(verdict_json)
+        agent = Critic(name="critic", system_prompt=_load_prompt("critic"), llm=llm)
+        state = _state_with_worker_deliverable()
+
+        result = agent.run(state)
+        verdict = result.artifacts[-1]["verdict"]
+        assert len(verdict["checklist"]) == 2
+        assert verdict["checklist"][1]["item"] == 4
+        assert verdict["checklist"][1]["verdict"] == "FAIL"
+
+    def test_checklist_survives_parse_save_load_roundtrip(self) -> None:
+        verdict_json = json.dumps({
+            "approved": False,
+            "checklist": [
+                {"item": 1, "verdict": "FAIL", "reason": "criterion not met"},
+                {"item": 4, "verdict": "FAIL", "reason": "mutable default arg"},
+                {"item": 6, "verdict": "PASS", "reason": "runs without error"},
+            ],
+            "issues": [{"severity": "high", "detail": "acc=[] leaks state"}],
+        })
+        llm = _make_mock_llm(verdict_json)
+        agent = Critic(name="critic", system_prompt=_load_prompt("critic"), llm=llm)
+        state = _state_with_worker_deliverable()
+        agent.run(state)
+
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "run.json"
+            state.save(path)
+            loaded = RunState.load(path)
+
+        verdict = loaded.artifacts[-1]["verdict"]
+        assert verdict["approved"] is False
+        assert len(verdict["checklist"]) == 3
+        assert verdict["checklist"][1]["item"] == 4
+        assert verdict["checklist"][1]["verdict"] == "FAIL"
+        assert verdict["checklist"][1]["reason"] == "mutable default arg"
+        assert verdict["issues"][0]["severity"] == "high"
 
     def test_worker_revision_includes_feedback_in_context(self) -> None:
         """Worker.run with feedback includes issues_to_address and

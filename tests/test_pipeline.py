@@ -99,6 +99,81 @@ class TestLinearPipeline:
             assert len(loaded.artifacts) == 6  # 5 agents + sandbox
 
 
+class TestClarificationHalt:
+    """The pipeline must halt when the Orchestrator returns a sub-goal
+    carrying needs_clarification: true. Downstream stages must not run."""
+
+    def test_vague_brief_halts_after_orchestrator(self) -> None:
+        responses = [
+            json.dumps([{
+                "id": "1",
+                "goal": "Clarify the brief. What domain? What metrics?",
+                "success_criterion": "User provides specifics",
+                "needs_clarification": True,
+            }]),
+        ]
+        llm = _make_mock_llm(responses)
+        state = run_pipeline("Build me a dashboard.", llm, yes=True)
+
+        assert state.status == "needs_human_review"
+        assert len(state.artifacts) == 1
+        assert state.artifacts[0]["stage"] == "orchestrator"
+        # Exactly one LLM call: only the Orchestrator ran.
+        assert llm.complete.call_count == 1
+
+    def test_halt_records_clarification_request_in_transcript(self) -> None:
+        responses = [
+            json.dumps([{
+                "id": "1",
+                "goal": "Clarify: what business domain?",
+                "success_criterion": "specifics",
+                "needs_clarification": True,
+            }]),
+        ]
+        llm = _make_mock_llm(responses)
+        state = run_pipeline("vague", llm, yes=True)
+
+        joined = " | ".join(state.transcript)
+        assert "halted at orchestrator" in joined
+        assert "clarification request" in joined
+        assert "what business domain" in joined
+
+    def test_normal_brief_does_not_halt(self) -> None:
+        """A sub-goal without needs_clarification proceeds normally."""
+        responses = [
+            json.dumps([{"id": "1", "goal": "Build it", "success_criterion": "Works"}]),
+            json.dumps([{"sub_goal_id": "1", "findings": "f", "sources": "s"}]),
+            json.dumps({"overview": "o", "components": [], "build_order": [], "notes": ""}),
+            "done",
+            json.dumps({"approved": True, "issues": []}),
+        ]
+        llm = _make_mock_llm(responses)
+        state = run_pipeline("Concrete brief", llm, yes=True)
+
+        assert state.status == "complete"
+        assert llm.complete.call_count == 5
+
+    def test_needs_clarification_false_does_not_halt(self) -> None:
+        """Explicit needs_clarification: false on a normal sub-goal must not
+        halt the pipeline (regression guard for truthiness handling)."""
+        responses = [
+            json.dumps([{
+                "id": "1",
+                "goal": "Build it",
+                "success_criterion": "Works",
+                "needs_clarification": False,
+            }]),
+            json.dumps([{"sub_goal_id": "1", "findings": "f", "sources": "s"}]),
+            json.dumps({"overview": "o", "components": [], "build_order": [], "notes": ""}),
+            "done",
+            json.dumps({"approved": True, "issues": []}),
+        ]
+        llm = _make_mock_llm(responses)
+        state = run_pipeline("Concrete brief", llm, yes=True)
+
+        assert state.status == "complete"
+
+
 class TestQALoop:
     def test_critic_always_rejects_stops_at_max_rounds(self) -> None:
         """Critic rejects every round; loop stops at MAX_QA_ROUNDS (3)

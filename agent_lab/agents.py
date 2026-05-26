@@ -37,7 +37,13 @@ class Orchestrator(Agent):
         state.transcript.append(f"[{self.STAGE}] produced {len(sub_goals)} sub-goals")
         return state
 
-    def _parse(self, raw: str) -> list[dict[str, str]]:
+    def _parse(self, raw: str) -> list[dict[str, str | bool]]:
+        """Parse the Orchestrator's JSON output into a list of sub-goal dicts.
+
+        Each sub-goal has `id`, `goal`, `success_criterion`. A sub-goal MAY
+        also carry `needs_clarification: true` to signal that the brief is
+        too vague to decompose — the pipeline halts on this marker.
+        """
         text = _strip_markdown_fences(raw)
         try:
             parsed = json.loads(text)
@@ -45,9 +51,9 @@ class Orchestrator(Agent):
             return [{"id": "1", "goal": raw, "success_criterion": "see goal"}]
 
         if isinstance(parsed, list):
-            return parsed
+            return [_coerce_sub_goal(sg) for sg in parsed]
         if isinstance(parsed, dict) and "sub_goals" in parsed:
-            return parsed["sub_goals"]
+            return [_coerce_sub_goal(sg) for sg in parsed["sub_goals"]]
         return [{"id": "1", "goal": raw, "success_criterion": "see goal"}]
 
 
@@ -199,14 +205,30 @@ class Critic(Agent):
             if isinstance(parsed, dict) and "approved" in parsed:
                 return {
                     "approved": bool(parsed["approved"]),
+                    "checklist": parsed.get("checklist", []),
                     "issues": parsed.get("issues", []),
                 }
         except json.JSONDecodeError:
             pass
-        return {"approved": True, "issues": []}
+        return {"approved": True, "checklist": [], "issues": []}
 
 
 # ── helpers ──────────────────────────────────────────────────────────
+
+
+def _coerce_sub_goal(sg: dict) -> dict[str, str | bool]:
+    """Normalize a sub-goal dict. Keeps string fields as strings and the
+    optional `needs_clarification` field as a bool (False if absent)."""
+    if not isinstance(sg, dict):
+        return {"id": "?", "goal": str(sg), "success_criterion": "see goal"}
+    normalized: dict[str, str | bool] = {
+        "id": str(sg.get("id", "?")),
+        "goal": str(sg.get("goal", "")),
+        "success_criterion": str(sg.get("success_criterion", "")),
+    }
+    if sg.get("needs_clarification"):
+        normalized["needs_clarification"] = True
+    return normalized
 
 
 def _strip_markdown_fences(raw: str) -> str:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -151,3 +152,48 @@ class TestMainErrors:
                     assert exc.code != 0
                 else:
                     raise AssertionError("Expected SystemExit")
+
+
+class TestYesFlagGuard:
+    """--yes must not bypass the human gate outside tests (BUILD_PLAN Phase 5)."""
+
+    def test_yes_rejected_without_env_var_or_pytest(self) -> None:
+        """In a non-pytest, non-opted-in environment, --yes must exit nonzero."""
+        state = _mock_state()
+        with TemporaryDirectory() as tmp:
+            out, p = _mock_main_deps(state, tmp, ["main", "--brief", "x", "--yes"])
+            # Simulate production: strip PYTEST_CURRENT_TEST and AGENT_LAB_ALLOW_YES
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("PYTEST_CURRENT_TEST", None)
+                os.environ.pop("AGENT_LAB_ALLOW_YES", None)
+                with p["sys.argv"], p["llm_client"], p["run_pipeline"] as mock_run:
+                    try:
+                        main()
+                    except SystemExit as exc:
+                        assert exc.code == 2
+                    else:
+                        raise AssertionError("Expected SystemExit")
+                    mock_run.assert_not_called()
+
+    def test_yes_honored_with_allow_env_var(self) -> None:
+        """AGENT_LAB_ALLOW_YES=1 lets --yes through even outside pytest."""
+        state = _mock_state()
+        with TemporaryDirectory() as tmp:
+            out, p = _mock_main_deps(state, tmp, ["main", "--brief", "x", "--yes"])
+            with patch.dict(os.environ, {"AGENT_LAB_ALLOW_YES": "1"}, clear=False):
+                os.environ.pop("PYTEST_CURRENT_TEST", None)
+                with p["sys.argv"], p["llm_client"], p["run_pipeline"] as mock_run:
+                    main()
+                mock_run.assert_called_once()
+                assert out.exists()
+
+    def test_yes_honored_under_pytest(self) -> None:
+        """When pytest sets PYTEST_CURRENT_TEST, --yes is honored (this very
+        test runs under pytest, so the env var is present by construction)."""
+        assert "PYTEST_CURRENT_TEST" in os.environ
+        state = _mock_state()
+        with TemporaryDirectory() as tmp:
+            out, p = _mock_main_deps(state, tmp, ["main", "--brief", "x", "--yes"])
+            with p["sys.argv"], p["llm_client"], p["run_pipeline"] as mock_run:
+                main()
+            mock_run.assert_called_once()

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 from pathlib import Path
 
 from agent_lab.budget import BudgetTracker
@@ -8,6 +10,17 @@ from agent_lab.config import MAX_TOTAL_TOKENS, MAX_USD
 from agent_lab.llm_client import LLMClient
 from agent_lab.pipeline import resume_pipeline, run_pipeline
 from agent_lab.state import RunState
+
+
+def _yes_flag_allowed() -> bool:
+    """--yes auto-approves both human gates. Per BUILD_PLAN Phase 5 this is
+    permitted ONLY for tests. Allow it under pytest (PYTEST_CURRENT_TEST set
+    by pytest itself) or with an explicit AGENT_LAB_ALLOW_YES=1 opt-in.
+    """
+    return (
+        os.environ.get("AGENT_LAB_ALLOW_YES") == "1"
+        or "PYTEST_CURRENT_TEST" in os.environ
+    )
 
 
 def _print_state_summary(state: RunState) -> None:
@@ -40,6 +53,15 @@ def main() -> None:
         help="Auto-approve all human gates (for tests only, never the default)",
     )
     args = parser.parse_args()
+
+    if args.yes and not _yes_flag_allowed():
+        print(
+            "ERROR: --yes auto-approves the human gate and is only available "
+            "for tests. Set AGENT_LAB_ALLOW_YES=1 to override, or remove --yes "
+            "and respond at the gate prompt.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     budget = BudgetTracker(max_tokens=MAX_TOTAL_TOKENS, max_usd=MAX_USD)
     llm = LLMClient(budget)
