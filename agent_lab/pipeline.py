@@ -54,6 +54,7 @@ def run_pipeline(brief: str, llm: LLMClient, yes: bool = False) -> RunState:
     needs_human_review and gates are skipped.
     """
     state = RunState(brief=brief)
+    llm.budget.attach_transcript(state.transcript)
     gate = HumanGate(yes=yes)
 
     orch = Orchestrator("Orchestrator", _load_prompt("orchestrator"), llm)
@@ -164,6 +165,7 @@ def resume_pipeline(state: RunState, llm: LLMClient, yes: bool = False) -> RunSt
       automated QA loop could not).
     - ``running`` — should not appear in a saved state; treat as no-op.
     """
+    llm.budget.attach_transcript(state.transcript)
     gate = HumanGate(yes=yes)
 
     if state.status == "complete":

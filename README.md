@@ -92,7 +92,7 @@ Edit `agent_lab/config.py` to adjust:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `MAX_TOTAL_TOKENS` | 100,000 | Token ceiling per run |
+| `MAX_TOTAL_TOKENS` | 250,000 | Token ceiling per run (soft warning at 80%) |
 | `MAX_USD` | 1.00 | Cost ceiling per run |
 | `MAX_QA_ROUNDS` | 3 | Max Worker-Critic revision rounds |
 | `PRICING` | per-model | USD per million tokens (input, output) |

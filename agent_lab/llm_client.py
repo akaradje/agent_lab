@@ -14,7 +14,7 @@ class LLMClient:
             base_url="https://api.deepseek.com",
             api_key=api_key,
         )
-        self._budget = budget
+        self.budget = budget
 
     def complete(
         self,
@@ -37,7 +37,7 @@ class LLMClient:
 
         usage = response.usage
         if usage:
-            self._budget.record(
+            self.budget.record(
                 model=model,
                 input_tokens=usage.prompt_tokens or 0,
                 output_tokens=usage.completion_tokens or 0,

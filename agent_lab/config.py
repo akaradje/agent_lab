@@ -1,5 +1,9 @@
 # Hard ceilings — when any is hit, the run stops.
-MAX_TOTAL_TOKENS = 100_000
+# Basis for MAX_TOTAL_TOKENS: a normal heavy research run (RESEARCH_BRIEF_01,
+# Worker producing a ~17 KB harness with 3 QA rounds) used ~90k tokens. 250k
+# leaves headroom for larger briefs while still catching a runaway loop —
+# any actual loop would blow far past 250k well before it could do damage.
+MAX_TOTAL_TOKENS = 250_000
 MAX_USD = 1.00
 MAX_QA_ROUNDS = 3
 

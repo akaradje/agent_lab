@@ -110,3 +110,71 @@ class TestBudgetTracker:
         assert "Cost Report" in report
         assert "0" in report  # call count
         assert "50,000" in report  # ceiling
+
+
+class TestBudgetSoftWarning:
+    """80% soft-warning: logs once to transcript when threshold is crossed.
+    The run continues — only the hard ceiling stops it."""
+
+    def test_warning_fires_when_threshold_crossed(self) -> None:
+        transcript: list[str] = []
+        bt = BudgetTracker(max_tokens=10_000, max_usd=10.00, transcript=transcript)
+
+        # 5,000 tokens (50%) — well under threshold; no warning
+        bt.record("deepseek-v4-flash", input_tokens=3000, output_tokens=2000)
+        assert transcript == []
+
+        # 8,500 tokens cumulative (85%) — crosses 80%; warning fires
+        bt.record("deepseek-v4-flash", input_tokens=2000, output_tokens=1500)
+        assert len(transcript) == 1
+        assert "[budget] WARNING" in transcript[0]
+        assert "8,500" in transcript[0]
+        assert "10,000" in transcript[0]
+
+    def test_warning_fires_only_once(self) -> None:
+        transcript: list[str] = []
+        bt = BudgetTracker(max_tokens=10_000, max_usd=10.00, transcript=transcript)
+
+        bt.record("deepseek-v4-flash", input_tokens=4500, output_tokens=4000)  # 85%
+        bt.record("deepseek-v4-flash", input_tokens=300, output_tokens=200)    # 90%
+        # Only one warning despite continued growth above threshold
+        warnings = [t for t in transcript if "[budget] WARNING" in t]
+        assert len(warnings) == 1
+
+    def test_no_warning_below_threshold(self) -> None:
+        transcript: list[str] = []
+        bt = BudgetTracker(max_tokens=10_000, max_usd=10.00, transcript=transcript)
+
+        # 7,900 tokens (79%) — just under 80%
+        bt.record("deepseek-v4-flash", input_tokens=4000, output_tokens=3900)
+        assert transcript == []
+
+    def test_warning_does_not_stop_run(self) -> None:
+        """A soft warning is informational. The next record() must succeed
+        as long as the hard ceiling is not crossed."""
+        transcript: list[str] = []
+        bt = BudgetTracker(max_tokens=10_000, max_usd=10.00, transcript=transcript)
+
+        bt.record("deepseek-v4-flash", input_tokens=4500, output_tokens=4000)  # 85%
+        # Next call still well under hard ceiling — must NOT raise
+        bt.record("deepseek-v4-flash", input_tokens=300, output_tokens=200)
+        assert bt.total_tokens == 9000  # all calls accepted
+
+    def test_attach_transcript_after_construction(self) -> None:
+        """Pipeline attaches the transcript AFTER the BudgetTracker is created
+        in main.py. The warning must still land in the attached transcript."""
+        bt = BudgetTracker(max_tokens=10_000, max_usd=10.00)  # no transcript yet
+        transcript: list[str] = []
+        bt.attach_transcript(transcript)
+
+        bt.record("deepseek-v4-flash", input_tokens=5000, output_tokens=4000)  # 90%
+        assert len(transcript) == 1
+        assert "[budget] WARNING" in transcript[0]
+
+    def test_no_transcript_attached_still_no_crash(self) -> None:
+        """If no transcript is attached, crossing the threshold must not
+        raise — the warning is simply not logged."""
+        bt = BudgetTracker(max_tokens=10_000, max_usd=10.00)  # no transcript
+        # Should not raise
+        bt.record("deepseek-v4-flash", input_tokens=5000, output_tokens=4000)
+        assert bt.total_tokens == 9000
