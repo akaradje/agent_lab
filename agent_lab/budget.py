@@ -71,9 +71,9 @@ class BudgetTracker:
         """Return a human-readable cost report for the end of a run."""
         tokens_remaining, usd_remaining = self.remaining()
         lines = [
-            "─" * 40,
+            "-" * 40,
             " Cost Report",
-            "─" * 40,
+            "-" * 40,
             f"  LLM calls:          {self._call_count}",
             f"  Input tokens:       {self._total_input_tokens:,}",
             f"  Output tokens:      {self._total_output_tokens:,}",
@@ -81,6 +81,6 @@ class BudgetTracker:
             f"  Total cost:         ${self._total_cost:.6f}  (ceiling: ${self._max_usd:.2f})",
             f"  Remaining tokens:   {tokens_remaining:,}",
             f"  Remaining budget:   ${usd_remaining:.6f}",
-            "─" * 40,
+            "-" * 40,
         ]
         return "\n".join(lines)
