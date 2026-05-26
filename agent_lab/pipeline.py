@@ -133,6 +133,97 @@ def run_pipeline(brief: str, llm: LLMClient, yes: bool = False) -> RunState:
     return state
 
 
+def resume_pipeline(state: RunState, llm: LLMClient, yes: bool = False) -> RunState:
+    """Continue a saved pipeline run from its current status.
+
+    Handles four cases:
+    - ``complete`` — nothing to do, return as-is.
+    - ``rejected_at_gate_final`` — re-present the final approval gate.
+    - ``rejected_at_gate_sandbox`` — re-present the sandbox gate, run sandbox
+      if approved, then re-present the final gate.
+    - ``needs_human_review`` — show the last Critic issues, then proceed
+      through sandbox + final gates (the human is making the call the
+      automated QA loop could not).
+    - ``running`` — should not appear in a saved state; treat as no-op.
+    """
+    gate = HumanGate(yes=yes)
+
+    if state.status == "complete":
+        return state
+
+    if state.status == "running":
+        return state
+
+    if state.status == "rejected_at_gate_final":
+        decision = gate.ask(
+            "Sandbox completed. Review the deliverable and approve final output?"
+        )
+        state.transcript.append(f"[gate] final gate decision (resume): {decision}")
+        state.status = "complete" if decision == "approve" else "rejected_at_gate_final"
+        return state
+
+    # rejected_at_gate_sandbox or needs_human_review — (re)present sandbox gate
+    if state.status == "needs_human_review":
+        _print_critic_issues(state)
+
+    decision = gate.ask("About to execute the deliverable in a sandbox. Approve?")
+    state.transcript.append(f"[gate] sandbox gate decision (resume): {decision}")
+    if decision != "approve":
+        state.status = "rejected_at_gate_sandbox"
+        return state
+
+    worker_deliverable = _find_last_worker_deliverable(state)
+    if not worker_deliverable:
+        state.status = "needs_human_review"
+        return state
+
+    code = extract_code_from_deliverable(worker_deliverable)
+    sandbox = Sandbox()
+    try:
+        result = sandbox.run(code, pre_approved=True)
+    except Exception as exc:
+        state.artifacts.append({
+            "stage": "sandbox",
+            "agent": "Sandbox",
+            "error": str(exc),
+        })
+        state.transcript.append(f"[sandbox] execution raised: {exc}")
+        state.status = "needs_human_review"
+        return state
+
+    state.artifacts.append({
+        "stage": "sandbox",
+        "agent": "Sandbox",
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "exit_code": result.exit_code,
+        "timed_out": result.timed_out,
+    })
+    state.transcript.append(
+        f"[sandbox] exit_code={result.exit_code}, timed_out={result.timed_out}"
+    )
+
+    decision = gate.ask(
+        "Sandbox completed. Review the deliverable and approve final output?"
+    )
+    state.transcript.append(f"[gate] final gate decision (resume): {decision}")
+    state.status = "complete" if decision == "approve" else "rejected_at_gate_final"
+    return state
+
+
+def _print_critic_issues(state: RunState) -> None:
+    """Print the last Critic's issues to stdout so the human can review them."""
+    for a in reversed(state.artifacts):
+        if a.get("stage") == "critic":
+            verdict = a.get("verdict", {})
+            issues = verdict.get("issues", [])
+            if issues:
+                print(f"\nCritic flagged {len(issues)} issue(s):")
+                for i, issue in enumerate(issues, 1):
+                    print(f"  {i}. {issue}")
+            break
+
+
 def _find_last_worker_deliverable(state: RunState) -> str | None:
     """Return the deliverable text from the last Worker artifact, or None."""
     for a in reversed(state.artifacts):

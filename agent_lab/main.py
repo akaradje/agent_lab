@@ -6,12 +6,29 @@ from pathlib import Path
 from agent_lab.budget import BudgetTracker
 from agent_lab.config import MAX_TOTAL_TOKENS, MAX_USD
 from agent_lab.llm_client import LLMClient
-from agent_lab.pipeline import run_pipeline
+from agent_lab.pipeline import resume_pipeline, run_pipeline
+from agent_lab.state import RunState
+
+
+def _print_state_summary(state: RunState) -> None:
+    """Print a summary of a loaded run state for the resume command."""
+    print(f"\nLoaded run: {state.brief[:80]}...")
+    print(f"  Status:     {state.status}")
+    print(f"  Artifacts:  {len(state.artifacts)}")
+    stages = [a.get("stage") for a in state.artifacts]
+    print(f"  Stages:     {' -> '.join(stages) if stages else '(none)'}")
+    print(f"  Transcript: {len(state.transcript)} entries")
+    print()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Agent Lab pipeline runner")
-    parser.add_argument("--brief", required=True, help="Project brief to execute")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--brief", help="Project brief to execute")
+    mode.add_argument(
+        "--resume",
+        help="Resume from a saved run state JSON file",
+    )
     parser.add_argument(
         "--output",
         default="run_output.json",
@@ -26,11 +43,24 @@ def main() -> None:
 
     budget = BudgetTracker(max_tokens=MAX_TOTAL_TOKENS, max_usd=MAX_USD)
     llm = LLMClient(budget)
+
+    if args.resume:
+        resume_path = Path(args.resume)
+        state = RunState.load(resume_path)
+        _print_state_summary(state)
+        state = resume_pipeline(state, llm, yes=args.yes)
+        out_path = Path(args.output)
+        state.save(out_path)
+        print(f"\nResume complete. Status: {state.status}")
+        print(f"Output written to {out_path}")
+        return
+
     state = run_pipeline(args.brief, llm, yes=args.yes)
     state.save(Path(args.output))
-    print(f"Run complete. Status: {state.status}")
+    print(f"\nRun complete. Status: {state.status}")
     print(f"Artifacts: {len(state.artifacts)}")
     print(f"Output written to {args.output}")
+    print(budget.summary())
 
 
 if __name__ == "__main__":

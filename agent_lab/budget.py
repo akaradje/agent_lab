@@ -23,6 +23,7 @@ class BudgetTracker:
         self._total_input_tokens = 0
         self._total_output_tokens = 0
         self._total_cost = 0.0
+        self._call_count = 0
 
     @property
     def total_tokens(self) -> int:
@@ -31,6 +32,10 @@ class BudgetTracker:
     @property
     def total_cost(self) -> float:
         return self._total_cost
+
+    @property
+    def call_count(self) -> int:
+        return self._call_count
 
     def remaining(self) -> tuple[int, float]:
         return (
@@ -47,6 +52,7 @@ class BudgetTracker:
         self._total_input_tokens += input_tokens
         self._total_output_tokens += output_tokens
         self._total_cost += call_cost
+        self._call_count += 1
 
         if self.total_tokens > self._max_tokens:
             raise BudgetExceededError(
@@ -60,3 +66,21 @@ class BudgetTracker:
                 self.total_tokens,
                 round(self._total_cost, 6),
             )
+
+    def summary(self) -> str:
+        """Return a human-readable cost report for the end of a run."""
+        tokens_remaining, usd_remaining = self.remaining()
+        lines = [
+            "─" * 40,
+            " Cost Report",
+            "─" * 40,
+            f"  LLM calls:          {self._call_count}",
+            f"  Input tokens:       {self._total_input_tokens:,}",
+            f"  Output tokens:      {self._total_output_tokens:,}",
+            f"  Total tokens:       {self.total_tokens:,}  (ceiling: {self._max_tokens:,})",
+            f"  Total cost:         ${self._total_cost:.6f}  (ceiling: ${self._max_usd:.2f})",
+            f"  Remaining tokens:   {tokens_remaining:,}",
+            f"  Remaining budget:   ${usd_remaining:.6f}",
+            "─" * 40,
+        ]
+        return "\n".join(lines)

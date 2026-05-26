@@ -325,3 +325,146 @@ class TestHumanGates:
             result = gate.ask("Test gate")
             assert result == "approve"
             assert mock_input.call_count == 2
+
+
+class TestResumePipeline:
+    """Tests for Phase 7 resume-from-JSON."""
+
+    def _make_state(self, status: str) -> RunState:
+        state = RunState(brief="test brief")
+        state.status = status
+        state.artifacts = [
+            {"stage": "orchestrator", "agent": "Orchestrator", "sub_goals": []},
+            {"stage": "researcher", "agent": "Researcher", "findings": []},
+            {"stage": "architect", "agent": "Architect", "design": {}},
+            {"stage": "worker", "agent": "Worker", "deliverable": "print('hello')"},
+            {
+                "stage": "critic",
+                "agent": "Critic",
+                "verdict": {"approved": False, "issues": ["bug"]},
+            },
+        ]
+        state.transcript = ["[orchestrator] start", "[critic] done"]
+        return state
+
+    def test_resume_complete_returns_as_is(self) -> None:
+        from agent_lab.pipeline import resume_pipeline
+
+        state = self._make_state("complete")
+        llm = MagicMock()
+        result = resume_pipeline(state, llm, yes=True)
+
+        assert result.status == "complete"
+        assert llm.complete.call_count == 0  # no LLM calls
+
+    def test_resume_running_returns_as_is(self) -> None:
+        from agent_lab.pipeline import resume_pipeline
+
+        state = self._make_state("running")
+        llm = MagicMock()
+        result = resume_pipeline(state, llm, yes=True)
+
+        assert result.status == "running"
+        assert llm.complete.call_count == 0
+
+    def test_resume_rejected_at_final_gate_approves(self) -> None:
+        from agent_lab.pipeline import resume_pipeline
+
+        state = self._make_state("rejected_at_gate_final")
+        llm = MagicMock()
+
+        with __import__("unittest").mock.patch("builtins.input") as mock_input:
+            mock_input.return_value = "approve"
+            result = resume_pipeline(state, llm, yes=False)
+
+        assert result.status == "complete"
+        assert mock_input.call_count == 1
+        assert any("final gate" in t for t in result.transcript)
+
+    def test_resume_rejected_at_final_gate_rejects_again(self) -> None:
+        from agent_lab.pipeline import resume_pipeline
+
+        state = self._make_state("rejected_at_gate_final")
+        llm = MagicMock()
+
+        with __import__("unittest").mock.patch("builtins.input") as mock_input:
+            mock_input.return_value = "reject"
+            result = resume_pipeline(state, llm, yes=False)
+
+        assert result.status == "rejected_at_gate_final"
+
+    def test_resume_rejected_at_sandbox_runs_sandbox_and_final_gate(self) -> None:
+        from agent_lab.pipeline import resume_pipeline
+
+        state = self._make_state("rejected_at_gate_sandbox")
+        llm = MagicMock()
+
+        with __import__("unittest").mock.patch("builtins.input") as mock_input:
+            mock_input.side_effect = ["approve", "approve"]
+            result = resume_pipeline(state, llm, yes=False)
+
+        assert result.status == "complete"
+        assert mock_input.call_count == 2
+        # Sandbox artifact was added
+        sandbox_artifacts = [a for a in result.artifacts if a["stage"] == "sandbox"]
+        assert len(sandbox_artifacts) == 1
+        assert sandbox_artifacts[0]["exit_code"] == 0
+
+    def test_resume_rejected_at_sandbox_rejects_at_gate(self) -> None:
+        from agent_lab.pipeline import resume_pipeline
+
+        state = self._make_state("rejected_at_gate_sandbox")
+        llm = MagicMock()
+
+        with __import__("unittest").mock.patch("builtins.input") as mock_input:
+            mock_input.return_value = "reject"
+            result = resume_pipeline(state, llm, yes=False)
+
+        assert result.status == "rejected_at_gate_sandbox"
+        assert mock_input.call_count == 1
+        # No sandbox artifact added
+        sandbox_artifacts = [a for a in result.artifacts if a["stage"] == "sandbox"]
+        assert len(sandbox_artifacts) == 0
+
+    def test_resume_needs_human_review_proceeds_to_gates(self) -> None:
+        from agent_lab.pipeline import resume_pipeline
+
+        state = self._make_state("needs_human_review")
+        llm = MagicMock()
+
+        with __import__("unittest").mock.patch("builtins.input") as mock_input:
+            mock_input.side_effect = ["approve", "approve"]
+            result = resume_pipeline(state, llm, yes=False)
+
+        assert result.status == "complete"
+        assert mock_input.call_count == 2
+
+    def test_resume_with_yes_flag_auto_approves(self) -> None:
+        from agent_lab.pipeline import resume_pipeline
+
+        for status in ("rejected_at_gate_sandbox", "rejected_at_gate_final", "needs_human_review"):
+            state = self._make_state(status)
+            llm = MagicMock()
+            result = resume_pipeline(state, llm, yes=True)
+
+            assert result.status == "complete", f"failed for status={status}"
+            # Sandbox should have been added for sandbox/needs_human_review cases
+            if status in ("rejected_at_gate_sandbox", "needs_human_review"):
+                assert any(a["stage"] == "sandbox" for a in result.artifacts)
+
+    def test_resume_no_worker_deliverable_sets_needs_human_review(self) -> None:
+        from agent_lab.pipeline import resume_pipeline
+
+        state = self._make_state("rejected_at_gate_sandbox")
+        # Remove the worker deliverable
+        for a in state.artifacts:
+            if a["stage"] == "worker":
+                del a["deliverable"]
+        llm = MagicMock()
+
+        with __import__("unittest").mock.patch("builtins.input") as mock_input:
+            mock_input.return_value = "approve"
+            result = resume_pipeline(state, llm, yes=False)
+
+        assert result.status == "needs_human_review"
+        mock_input.assert_called_once()  # gate was presented

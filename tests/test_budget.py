@@ -82,3 +82,31 @@ class TestBudgetTracker:
         bt = BudgetTracker(max_tokens=100_000, max_usd=1.00)
         with pytest.raises(KeyError):
             bt.record("nonexistent-model", input_tokens=100, output_tokens=100)
+
+    def test_call_count_increments(self) -> None:
+        bt = BudgetTracker(max_tokens=100_000, max_usd=1.00)
+        assert bt.call_count == 0
+        bt.record("deepseek-v4-flash", input_tokens=100, output_tokens=50)
+        assert bt.call_count == 1
+        bt.record("deepseek-v4-pro", input_tokens=200, output_tokens=100)
+        assert bt.call_count == 2
+
+    def test_summary_contains_key_fields(self) -> None:
+        bt = BudgetTracker(max_tokens=100_000, max_usd=1.00)
+        bt.record("deepseek-v4-flash", input_tokens=1000, output_tokens=500)
+        bt.record("deepseek-v4-pro", input_tokens=2000, output_tokens=1000)
+
+        report = bt.summary()
+        assert "Cost Report" in report
+        assert "2" in report  # call count
+        assert "3,000" in report  # input tokens
+        assert "1,500" in report  # output tokens
+        assert "4,500" in report  # total tokens
+        assert "100,000" in report  # ceiling
+
+    def test_summary_with_no_calls(self) -> None:
+        bt = BudgetTracker(max_tokens=50_000, max_usd=0.50)
+        report = bt.summary()
+        assert "Cost Report" in report
+        assert "0" in report  # call count
+        assert "50,000" in report  # ceiling
