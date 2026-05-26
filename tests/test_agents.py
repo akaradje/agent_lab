@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from agent_lab.agents import Architect, Orchestrator, Researcher, Worker
+from agent_lab.agents import Architect, Critic, Orchestrator, Researcher, Worker
 from agent_lab.state import RunState
 
 
@@ -370,5 +370,170 @@ def _state_with_full_context() -> RunState:
             "build_order": ["Set up project", "Implement parser"],
             "notes": "Keep it simple",
         },
+    })
+    return state
+
+
+class TestCritic:
+    def test_run_approves_good_deliverable(self) -> None:
+        verdict_json = json.dumps({"approved": True, "issues": []})
+        llm = _make_mock_llm(verdict_json)
+        agent = Critic(name="critic", system_prompt=_load_prompt("critic"), llm=llm)
+        state = _state_with_worker_deliverable()
+
+        result = agent.run(state)
+        verdict = result.artifacts[-1]["verdict"]
+        assert verdict["approved"] is True
+        assert verdict["issues"] == []
+
+    def test_run_rejects_with_issues(self) -> None:
+        verdict_json = json.dumps({
+            "approved": False,
+            "issues": ["Bug in line 3", "Missing tests"],
+        })
+        llm = _make_mock_llm(verdict_json)
+        agent = Critic(name="critic", system_prompt=_load_prompt("critic"), llm=llm)
+        state = _state_with_worker_deliverable()
+
+        result = agent.run(state)
+        verdict = result.artifacts[-1]["verdict"]
+        assert verdict["approved"] is False
+        assert len(verdict["issues"]) == 2
+        assert "Bug in line 3" in verdict["issues"]
+
+    def test_run_uses_pro_model_from_config(self) -> None:
+        verdict_json = json.dumps({"approved": True, "issues": []})
+        llm = _make_mock_llm(verdict_json)
+        agent = Critic(name="critic", system_prompt=_load_prompt("critic"), llm=llm)
+        state = _state_with_worker_deliverable()
+
+        agent.run(state)
+        kwargs = llm.complete.call_args[1]
+        from agent_lab.config import AGENT_MODELS
+        expected_model, expected_reasoning = AGENT_MODELS["critic"]
+        assert kwargs["model"] == expected_model
+        assert kwargs["reasoning_effort"] == expected_reasoning
+
+    def test_run_appends_transcript(self) -> None:
+        verdict_json = json.dumps({"approved": True, "issues": []})
+        llm = _make_mock_llm(verdict_json)
+        agent = Critic(name="critic", system_prompt=_load_prompt("critic"), llm=llm)
+        state = _state_with_worker_deliverable()
+
+        result = agent.run(state)
+        assert any("[critic]" in entry for entry in result.transcript)
+
+    def test_run_looks_at_last_worker_artifact(self) -> None:
+        """When multiple worker artifacts exist, Critic reviews the latest."""
+        verdict_json = json.dumps({"approved": True, "issues": []})
+        llm = _make_mock_llm(verdict_json)
+        agent = Critic(name="critic", system_prompt=_load_prompt("critic"), llm=llm)
+        state = _state_with_worker_deliverable()
+        # Add a second worker artifact (simulating a revision)
+        state.artifacts.append({
+            "stage": "worker",
+            "agent": "Worker",
+            "deliverable": "revised deliverable v2",
+        })
+
+        agent.run(state)
+        call_args = llm.complete.call_args
+        user_content = call_args[1]["messages"][0]["content"]
+        assert "revised deliverable v2" in user_content
+        assert "v1 deliverable" not in user_content
+
+    def test_parse_fallback_on_invalid_json(self) -> None:
+        llm = _make_mock_llm("not valid json, I think it looks fine")
+        agent = Critic(name="critic", system_prompt=_load_prompt("critic"), llm=llm)
+        state = _state_with_worker_deliverable()
+
+        result = agent.run(state)
+        verdict = result.artifacts[-1]["verdict"]
+        # Fallback: treat unparseable output as approval to avoid looping
+        assert verdict["approved"] is True
+        assert verdict["issues"] == []
+
+    def test_parse_markdown_fenced_json(self) -> None:
+        fenced = '```json\n{"approved": false, "issues": ["x"]}\n```'
+        llm = _make_mock_llm(fenced)
+        agent = Critic(name="critic", system_prompt=_load_prompt("critic"), llm=llm)
+        state = _state_with_worker_deliverable()
+
+        result = agent.run(state)
+        verdict = result.artifacts[-1]["verdict"]
+        assert verdict["approved"] is False
+        assert verdict["issues"] == ["x"]
+
+    def test_parse_approved_without_issues_defaults_empty_list(self) -> None:
+        parsed = json.dumps({"approved": True})
+        llm = _make_mock_llm(parsed)
+        agent = Critic(name="critic", system_prompt=_load_prompt("critic"), llm=llm)
+        state = _state_with_worker_deliverable()
+
+        result = agent.run(state)
+        verdict = result.artifacts[-1]["verdict"]
+        assert verdict["approved"] is True
+        assert verdict["issues"] == []
+
+    def test_worker_revision_includes_feedback_in_context(self) -> None:
+        """Worker.run with feedback includes issues_to_address and
+        previous_deliverable in the LLM context."""
+        llm = _make_mock_llm("revised output")
+        agent = Worker(name="wrk", system_prompt=_load_prompt("worker"), llm=llm)
+        state = _state_with_worker_deliverable()
+
+        agent.run(state, feedback=["Fix bug A", "Add tests"])
+        call_args = llm.complete.call_args
+        user_content = call_args[1]["messages"][0]["content"]
+        assert "issues_to_address" in user_content
+        assert "Fix bug A" in user_content
+        assert "Add tests" in user_content
+        assert "previous_deliverable" in user_content
+        assert "v1 deliverable" in user_content
+
+    def test_worker_without_feedback_does_not_include_revision_fields(self) -> None:
+        """Worker.run without feedback should not include revision fields."""
+        llm = _make_mock_llm("fresh output")
+        agent = Worker(name="wrk", system_prompt=_load_prompt("worker"), llm=llm)
+        state = _state_with_worker_deliverable()
+
+        agent.run(state)  # no feedback
+        call_args = llm.complete.call_args
+        user_content = call_args[1]["messages"][0]["content"]
+        assert "issues_to_address" not in user_content
+        assert "previous_deliverable" not in user_content
+
+
+def _state_with_worker_deliverable() -> RunState:
+    """Full context through Worker stage."""
+    state = RunState(brief="test brief")
+    state.artifacts.append({
+        "stage": "orchestrator",
+        "agent": "Orchestrator",
+        "sub_goals": [
+            {"id": "1", "goal": "Research", "success_criterion": "Notes"},
+        ],
+    })
+    state.artifacts.append({
+        "stage": "researcher",
+        "agent": "Researcher",
+        "findings": [
+            {"sub_goal_id": "1", "findings": "Use X", "sources": "docs"},
+        ],
+    })
+    state.artifacts.append({
+        "stage": "architect",
+        "agent": "Architect",
+        "design": {
+            "overview": "A CLI tool",
+            "components": [],
+            "build_order": ["main.py"],
+            "notes": "",
+        },
+    })
+    state.artifacts.append({
+        "stage": "worker",
+        "agent": "Worker",
+        "deliverable": "v1 deliverable",
     })
     return state
