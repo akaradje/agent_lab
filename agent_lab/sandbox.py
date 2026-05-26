@@ -97,9 +97,12 @@ class Sandbox:
                 exit_code=proc.returncode,
             )
         except subprocess.TimeoutExpired as exc:
+            # subprocess.run was called with text=True, so exc.stdout/stderr
+            # are str when present. Do not call .decode() — it raises
+            # AttributeError on str.
             return SandboxResult(
-                stdout=exc.stdout.decode("utf-8", errors="replace") if exc.stdout else "",
-                stderr=exc.stderr.decode("utf-8", errors="replace") if exc.stderr else "",
+                stdout=exc.stdout or "",
+                stderr=exc.stderr or "",
                 exit_code=-1,
                 timed_out=True,
             )

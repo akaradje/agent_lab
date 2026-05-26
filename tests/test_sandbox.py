@@ -47,6 +47,26 @@ class TestSandboxExecute:
         sandbox = Sandbox()
         assert sandbox.timeout_seconds == 30
 
+    def test_timeout_with_buffered_output_does_not_raise(self) -> None:
+        """Regression: when a script prints to stdout/stderr and then exceeds
+        the timeout, subprocess captures the output as str (text=True). The
+        timeout branch used to call .decode() on it and raise AttributeError.
+        """
+        sandbox = Sandbox(timeout_seconds=1)
+        code = (
+            "import sys, time\n"
+            "print('out before sleep', flush=True)\n"
+            "sys.stderr.write('err before sleep\\n')\n"
+            "sys.stderr.flush()\n"
+            "time.sleep(10)\n"
+        )
+        result = sandbox._execute(code)
+
+        assert result.timed_out is True
+        assert result.exit_code == -1
+        assert isinstance(result.stdout, str)
+        assert isinstance(result.stderr, str)
+
 
 class TestSandboxApproval:
     """Tests for the human-approval gate."""
