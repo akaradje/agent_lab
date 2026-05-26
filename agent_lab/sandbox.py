@@ -11,6 +11,7 @@ container isolation would plug in — search for CONTAINER-UPGRADE.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 import textwrap
@@ -108,36 +109,45 @@ class Sandbox:
             )
 
 
-def extract_code_from_deliverable(deliverable: str) -> str:
-    """Best-effort extraction of Python code from a Worker deliverable.
+_FENCED_BLOCK_RE = re.compile(
+    r"```[A-Za-z0-9_+\-]*[ \t]*\n"   # opening fence (optional lang tag) + newline
+    r"(?P<code>.*?)"                  # captured code (non-greedy)
+    r"\n```[ \t]*(?:\n|\Z)",          # closing fence ALONE on its line
+    re.DOTALL,
+)
 
-    Handles two common patterns:
-    1. A fenced code block (```python ... ```).
-    2. Plain-text that is already code.
+_OPENING_FENCE_RE = re.compile(r"```[A-Za-z0-9_+\-]*[ \t]*\n")
+
+
+def extract_code_from_deliverable(deliverable: str) -> str:
+    """Extract Python code from a Worker deliverable.
+
+    The closing fence must be on its OWN line (no other content). This is
+    what distinguishes a real markdown fence from triple-backticks that
+    appear INSIDE a string literal in the code itself, e.g.
+    ``if code.startswith("```python"):`` — the inner ``` is mid-line and
+    not a fence. The previous implementation matched the first inner ```
+    as the closing fence, truncating the code mid-string-literal and
+    producing a SyntaxError.
+
+    Cases handled:
+    - Properly fenced block (with or without a language tag): return the
+      code between the fences, dedented and stripped.
+    - Multiple fenced blocks: return the FIRST one (non-greedy capture).
+    - Fenced block whose code contains ``` inside string literals: the
+      inner ``` is mid-line, so it never matches the closing fence.
+    - Opening fence with no closing fence: take everything after the
+      opener as code (best-effort recovery).
+    - No fences at all: return the whole deliverable as code.
     """
     stripped = deliverable.strip()
-    marker = "```python"
-    if marker in stripped:
-        start = stripped.index(marker) + len(marker)
-        # Find closing fence after the opening
-        rest = stripped[start:]
-        end = rest.find("```")
-        if end != -1:
-            return textwrap.dedent(rest[:end]).strip()
-        # No closing fence — take everything after the opener
-        return textwrap.dedent(rest).strip()
-    # If there's a ``` without python marker, try that
-    if "```" in stripped:
-        start = stripped.index("```") + 3
-        rest = stripped[start:]
-        # Skip a language tag line if present
-        if "\n" in rest:
-            first_newline = rest.index("\n")
-            maybe_lang = rest[:first_newline].strip()
-            if maybe_lang and not maybe_lang.startswith(" "):
-                rest = rest[first_newline + 1 :]
-        end = rest.find("```")
-        if end != -1:
-            return textwrap.dedent(rest[:end]).strip()
-        return textwrap.dedent(rest).strip()
+
+    match = _FENCED_BLOCK_RE.search(stripped)
+    if match:
+        return textwrap.dedent(match.group("code")).strip()
+
+    open_match = _OPENING_FENCE_RE.search(stripped)
+    if open_match:
+        return textwrap.dedent(stripped[open_match.end():]).strip()
+
     return stripped

@@ -150,3 +150,78 @@ class TestExtractCodeFromDeliverable:
     def test_extract_empty_deliverable(self) -> None:
         result = extract_code_from_deliverable("")
         assert result == ""
+
+    def test_extract_code_with_inner_backticks_in_string_literal(self) -> None:
+        """Regression: code that itself manipulates markdown fences (a
+        common pattern in this project's deliverables) contains the literal
+        characters ``` inside string literals. The OLD extractor matched
+        the first inner ``` as the closing fence and truncated the code
+        mid-string, producing a SyntaxError when the Sandbox ran it.
+        The new extractor requires the closing ``` to be alone on a line."""
+        deliverable = (
+            "Here is the harness:\n"
+            "```python\n"
+            "def strip_fences(response: str) -> str:\n"
+            '    code = response.strip()\n'
+            '    if code.startswith("```python"):\n'
+            "        code = code[9:].strip()\n"
+            '    if code.endswith("```"):\n'
+            "        code = code[:-3].strip()\n"
+            "    return code\n"
+            "```\n"
+            "End of deliverable."
+        )
+        result = extract_code_from_deliverable(deliverable)
+
+        # All inner-backtick lines must survive intact
+        assert 'if code.startswith("```python"):' in result
+        assert 'if code.endswith("```"):' in result
+        # The extracted code must parse — this is what the Sandbox would do
+        compile(result, "<extracted>", "exec")
+
+    def test_extract_code_with_inner_backticks_must_run(self) -> None:
+        """End-to-end check: the extracted code, when executed by Python,
+        must run without SyntaxError. This is exactly the path that failed
+        in the RESEARCH_BRIEF_01 run."""
+        deliverable = (
+            "```python\n"
+            'TEMPLATE = "wrap me in ``` fences"\n'
+            "print(TEMPLATE)\n"
+            "```"
+        )
+        code = extract_code_from_deliverable(deliverable)
+        ns: dict = {}
+        exec(compile(code, "<extracted>", "exec"), ns)
+        # The TEMPLATE constant should survive intact, backticks and all.
+        assert ns["TEMPLATE"] == "wrap me in ``` fences"
+
+    def test_extract_no_fences_treats_whole_text_as_code(self) -> None:
+        """Explicit case: no fences anywhere — extractor returns the whole
+        deliverable (stripped) as code."""
+        deliverable = "def foo():\n    return 42\n\nfoo()"
+        result = extract_code_from_deliverable(deliverable)
+        assert result == "def foo():\n    return 42\n\nfoo()"
+
+    def test_extract_multiple_fences_takes_first_complete_block(self) -> None:
+        """When there are multiple fenced blocks, return the first whose
+        closing fence is on its own line — not a longer greedy span that
+        would include the second block's code."""
+        deliverable = (
+            "```python\n"
+            "x = 1\n"
+            "```\n"
+            "Some prose between blocks.\n"
+            "```python\n"
+            "y = 2\n"
+            "```"
+        )
+        result = extract_code_from_deliverable(deliverable)
+        assert result == "x = 1"
+        assert "y = 2" not in result
+
+    def test_extract_closing_fence_with_trailing_whitespace(self) -> None:
+        """A closing fence followed by whitespace (still alone on its line)
+        is still a valid closing fence."""
+        deliverable = "```python\nprint('ok')\n```   \n"
+        result = extract_code_from_deliverable(deliverable)
+        assert result == "print('ok')"
