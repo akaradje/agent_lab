@@ -45,13 +45,14 @@ class TestLinearPipeline:
         state = run_pipeline("Build a hello-world CLI", llm, yes=True)
 
         assert state.status == "complete"
-        assert len(state.artifacts) == 5
+        assert len(state.artifacts) == 6  # 5 agents + sandbox
         assert state.artifacts[0]["stage"] == "orchestrator"
         assert state.artifacts[1]["stage"] == "researcher"
         assert state.artifacts[2]["stage"] == "architect"
         assert state.artifacts[3]["stage"] == "worker"
         assert state.artifacts[4]["stage"] == "critic"
-        assert len(state.transcript) >= 7  # 5 agents + 2 gate entries
+        assert state.artifacts[5]["stage"] == "sandbox"
+        assert len(state.transcript) >= 8  # 5 agents + sandbox + 2 gate entries
 
     def test_state_passes_brief_through(self) -> None:
         responses = [
@@ -95,7 +96,7 @@ class TestLinearPipeline:
             state.save(path)
             loaded = RunState.load(path)
             assert loaded.status == "complete"
-            assert len(loaded.artifacts) == 5
+            assert len(loaded.artifacts) == 6  # 5 agents + sandbox
 
 
 class TestQALoop:

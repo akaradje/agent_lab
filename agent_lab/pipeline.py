@@ -5,6 +5,7 @@ from pathlib import Path
 from agent_lab.agents import Architect, Critic, Orchestrator, Researcher, Worker
 from agent_lab.config import MAX_QA_ROUNDS
 from agent_lab.llm_client import LLMClient
+from agent_lab.sandbox import Sandbox, extract_code_from_deliverable
 from agent_lab.state import RunState
 
 PROMPT_DIR = Path("specs/prompts")
@@ -45,7 +46,7 @@ def run_pipeline(brief: str, llm: LLMClient, yes: bool = False) -> RunState:
     Stages 1-4 linear, then a bounded Worker <-> Critic QA loop. If the
     Critic approves, the pipeline proceeds through two human gates:
 
-    1. Before Sandbox execution (Phase 6 will insert the Sandbox call here).
+    1. Before Sandbox execution.
     2. Before final output.
 
     If *yes* is True, both gates auto-approve (for tests only). If the
@@ -89,7 +90,37 @@ def run_pipeline(brief: str, llm: LLMClient, yes: bool = False) -> RunState:
         state.status = "rejected_at_gate_sandbox"
         return state
 
-    # Phase 6 will insert the Sandbox call here.
+    # Extract code from the final Worker deliverable and run in sandbox.
+    worker_deliverable = _find_last_worker_deliverable(state)
+    if not worker_deliverable:
+        state.status = "needs_human_review"
+        return state
+
+    code = extract_code_from_deliverable(worker_deliverable)
+    sandbox = Sandbox()
+    try:
+        result = sandbox.run(code, pre_approved=True)
+    except Exception as exc:
+        state.artifacts.append({
+            "stage": "sandbox",
+            "agent": "Sandbox",
+            "error": str(exc),
+        })
+        state.transcript.append(f"[sandbox] execution raised: {exc}")
+        state.status = "needs_human_review"
+        return state
+
+    state.artifacts.append({
+        "stage": "sandbox",
+        "agent": "Sandbox",
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "exit_code": result.exit_code,
+        "timed_out": result.timed_out,
+    })
+    state.transcript.append(
+        f"[sandbox] exit_code={result.exit_code}, timed_out={result.timed_out}"
+    )
 
     # Gate 2 — before final output
     decision = gate.ask("Sandbox completed. Review the deliverable and approve final output?")
@@ -100,3 +131,11 @@ def run_pipeline(brief: str, llm: LLMClient, yes: bool = False) -> RunState:
 
     state.status = "complete"
     return state
+
+
+def _find_last_worker_deliverable(state: RunState) -> str | None:
+    """Return the deliverable text from the last Worker artifact, or None."""
+    for a in reversed(state.artifacts):
+        if a.get("stage") == "worker":
+            return a.get("deliverable")  # type: ignore[no-any-return]
+    return None
