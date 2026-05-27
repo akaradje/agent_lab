@@ -25,7 +25,8 @@
       "PowerShell($env:PYTHONPATH = \"C:\\\\agent_lab\"; python -m pytest -q --no-header 2>&1 | Select-Object -Last 30)",
       "PowerShell($env:PYTHONPATH = \"C:\\\\agent_lab\"; python -m pytest -q --no-header 2>&1 | Select-Object -Last 15)",
       "PowerShell($env:PYTHONPATH = \"C:\\\\agent_lab\"; python -m pytest tests/test_pipeline.py::TestLinearPipeline::test_state_writes_valid_json -v 2>&1 | Select-Object -Last 40)",
-      "PowerShell($env:PYTHONPATH = \"C:\\\\agent_lab\"; python -m pytest tests/test_pipeline.py -q --no-header 2>&1 | Select-Object -Last 25)"
+      "PowerShell($env:PYTHONPATH = \"C:\\\\agent_lab\"; python -m pytest tests/test_pipeline.py -q --no-header 2>&1 | Select-Object -Last 25)",
+      "PowerShell(if \\($env:DEEPSEEK_API_KEY\\) { \"yes len=$\\($env:DEEPSEEK_API_KEY.Length\\)\" } else { \"no\" })"
     ]
   }
 }
