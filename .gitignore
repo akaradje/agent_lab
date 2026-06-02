@@ -3,5 +3,16 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .ruff_cache/
+.benchmarks/
 runs/
 run_output*.json
+
+# Claude Code local settings (machine-specific)
+.claude/settings.local.json
+
+# Temporary / runtime output
+harness_metrics.json
+_brief_step_a.txt
+_run_step_a.py
+reviewers.py
+run_step_b.py
